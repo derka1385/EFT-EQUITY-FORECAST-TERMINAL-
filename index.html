@@ -204,8 +204,8 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;background:var(--brig
 .risk-score-num{font-family:var(--sans);font-size:52px;font-weight:300;line-height:1;letter-spacing:-.03em}
 .risk-score-label{font-size:8px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted)}
 .risk-verdict{font-size:10px;font-weight:500;letter-spacing:.1em;padding:3px 10px;border:1px solid currentColor;text-transform:uppercase}
-.risk-body{display:grid;grid-template-columns:repeat(5,1fr);gap:0;border-bottom:1px solid var(--line)}
-@media(max-width:700px){.risk-body{grid-template-columns:repeat(3,1fr)}}
+.risk-body{display:grid;grid-template-columns:repeat(6,1fr);gap:0;border-bottom:1px solid var(--line)}
+@media(max-width:900px){.risk-body{grid-template-columns:repeat(3,1fr)}}
 @media(max-width:400px){.risk-body{grid-template-columns:repeat(2,1fr)}}
 .risk-metric{padding:10px 12px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);position:relative}
 .risk-metric:last-child{border-right:none}
@@ -984,79 +984,97 @@ function runModel(){
 ══════════════════════════════════════════ */
 function calcRisk(model, autocorr, horizon, simFinals){
   const sig     = model.sigma;
-  const sigAnn  = sig * Math.sqrt(252);
-  const sigT    = sig * Math.sqrt(horizon);   // σ√T — vol sur l'horizon
+  const sigT    = sig * Math.sqrt(horizon);
   const P0      = model.P0;
   const mu      = model.mu;
-  const hist    = model.hist;
 
   // ── 1. Volatilité temporelle (σ√T) ─────────────────────────────
-  // Plus l'horizon est long, plus σ√T grandit → risque structurel croissant
-  // On normalise : σ√T de 5% = risque faible, >40% = extrême
   const sigTPct = sigT * 100;
-  const r1 = Math.min(100, sigTPct / 40 * 100);  // 0=0%, 40%=100
+  const r1 = Math.min(100, sigTPct / 40 * 100);
 
-  // ── 2. VaR 95% sur l'horizon (log-normal GBM) ──────────────────
-  // VaR = P0 * (1 - exp((μ - σ²/2)*T - 1.645*σ√T))
+  // ── 2. VaR 95% analytique (log-normal GBM) ─────────────────────
   const varReturn = Math.exp((mu - 0.5*sig*sig)*horizon - 1.645*sigT) - 1;
-  const var95Pct  = Math.max(0, -varReturn * 100);  // en % de perte
-  // Normalise : 5% de perte = faible, 50% = extrême
+  const var95Pct  = Math.max(0, -varReturn * 100);
   const r2 = Math.min(100, var95Pct / 50 * 100);
 
-  // ── 3. Probabilité de perte P(PT < P0) depuis Monte Carlo ──────
+  // ── 3. Probabilité de perte P(PT < P0) — Monte Carlo ───────────
+  // Echelle directe : 0%→0, 50%→50, 100%→100
   const pLoss = simFinals.filter(v => v < P0).length / simFinals.length * 100;
-  // 50% = neutre, on pénalise à partir de 40%
-  const r3 = Math.min(100, Math.max(0, (pLoss - 30) / 40 * 100));
+  const r3 = pLoss;
 
-  // ── 4. Drawdown maximum historique ─────────────────────────────
-  let peak = hist[0], maxDD = 0;
-  for(const p of hist){ if(p > peak) peak = p; const dd = (peak - p)/peak; if(dd > maxDD) maxDD = dd; }
-  const maxDDpct = maxDD * 100;
-  // 10% drawdown = faible, 50% = extrême
-  const r4 = Math.min(100, maxDDpct / 50 * 100);
+  // ── 4. Perte espérée (Expected Loss) ───────────────────────────
+  // Moyenne des pertes simulées normalisée par P0
+  // Capture l'amplitude de la perte, pas juste la probabilité
+  const avgLoss = simFinals.reduce((s,v) => s + Math.max(0, P0 - v), 0)
+                  / simFinals.length / P0 * 100;
+  const r4 = Math.min(100, avgLoss / 50 * 100);
 
-  // ── 5. Momentum / régime ────────────────────────────────────────
-  // RSI extrême (>70 overbought, <30 oversold) + drift négatif = risque élevé
-  const rsiRisk = model.rsi > 70 ? (model.rsi - 70)/30*100
-                : model.rsi < 30 ? (30 - model.rsi)/30*60  // oversold = risque modéré
-                : 20;
-  const driftRisk = mu < 0 ? Math.min(100, Math.abs(mu)*252*200) : 0;
-  const r5 = Math.min(100, (rsiRisk * 0.6 + driftRisk * 0.4));
+  // ── 5. Momentum directionnel (RSI + drift annualisé) ───────────
+  const rsiRisk  = model.rsi > 70 ? (model.rsi - 70)/30*100
+                 : model.rsi < 30 ? (30 - model.rsi)/30*60
+                 : 20;
+  const driftRisk = mu < 0
+    ? Math.min(100, Math.abs(mu) * 252 / 0.50 * 100)
+    : Math.max(0, 10 - mu * 252 / 0.10 * 10);
+  const r5 = Math.min(100, rsiRisk * 0.4 + driftRisk * 0.6);
+
+  // ── 6. Consensus directionnel ───────────────────────────────────
+  // Compte les indicateurs indépendants pointant à la baisse :
+  // μ<0, slope<0, RSI<50, P(perte)>50, drift annualisé < -10%
+  // Convergence totale = risque maximal confirmé par plusieurs sources
+  let bearSignals = 0;
+  const totalSignals = 5;
+  if(mu < 0)              bearSignals++;
+  if(model.slope < 0)     bearSignals++;
+  if(model.rsi < 50)      bearSignals++;
+  if(pLoss > 50)          bearSignals++;
+  if(mu * 252 < -0.10)    bearSignals++;
+  const r6 = (bearSignals / totalSignals) * 100;
 
   // ── Pondérations dépendantes de l'horizon ───────────────────────
-  // Court terme (<10j) : VaR et momentum dominent
-  // Long terme (>30j)  : σ√T et drawdown dominent
-  const hRatio = Math.min(1, horizon / 60);   // 0=court, 1=long
-  const w1 = 0.15 + 0.20 * hRatio;   // σ√T : 15% → 35%
-  const w2 = 0.30 - 0.10 * hRatio;   // VaR 95% : 30% → 20%
-  const w3 = 0.25;                     // P(perte) : stable
-  const w4 = 0.10 + 0.15 * hRatio;   // Drawdown : 10% → 25%
-  const w5 = 0.20 - 0.10 * hRatio;   // Momentum : 20% → 10%
+  const hRatio = Math.min(1, horizon / 60);
+  const w1 = 0.07 + 0.06 * hRatio;   // σ√T : 7% → 13%
+  const w2 = 0.12 - 0.04 * hRatio;   // VaR 95% : 12% → 8%
+  const w3 = 0.28 + 0.05 * hRatio;   // P(perte) : 28% → 33%  ← dominant
+  const w4 = 0.12 + 0.08 * hRatio;   // EL : 12% → 20%
+  const w5 = 0.13 - 0.03 * hRatio;   // Momentum : 13% → 10%
+  const w6 = 0.28 - 0.12 * hRatio;   // Consensus : 28% → 16%
 
-  const raw   = r1*w1 + r2*w2 + r3*w3 + r4*w4 + r5*w5;
-  const score = Math.round(Math.min(99, Math.max(1, raw)));
+  const raw = r1*w1 + r2*w2 + r3*w3 + r4*w4 + r5*w5 + r6*w6;
 
-  const verdict = score >= 75 ? 'ÉLEVÉ'
-                : score >= 50 ? 'MODÉRÉ'
+  // ── Multiplicateur consensus complet ───────────────────────────
+  // Si tous les signaux pointent à la baisse ET P(perte) élevée
+  // → amplification vers le haut de l'échelle
+  const allBearish = bearSignals >= 4 && pLoss > 60 && mu < 0;
+  const lossCertainty = allBearish
+    ? 1 + (bearSignals / totalSignals) * 0.25
+    : 1;
+
+  const score = Math.round(Math.min(99, Math.max(1, raw * lossCertainty)));
+
+  const verdict = score >= 80 ? 'TRÈS ÉLEVÉ'
+                : score >= 62 ? 'ÉLEVÉ'
+                : score >= 44 ? 'MODÉRÉ'
                 : score >= 25 ? 'FAIBLE'
                 :               'TRÈS FAIBLE';
 
-  const color   = score >= 75 ? '#ff5a5a'
-                : score >= 50 ? '#f0c040'
-                : score >= 25 ? '#48c778'
-                :               '#5aa0ff';
+  const color = score >= 62 ? '#ff5a5a'
+              : score >= 44 ? '#f0c040'
+              : score >= 25 ? '#48c778'
+              :               '#5aa0ff';
 
   return {
     score, verdict, color,
     components: [
-      { lbl:'Vol. σ√T',       val: sigTPct.toFixed(1)+'%',  sub:'sur '+horizon+'j',        pct:r1, desc:'Volatilité cumulée sur l\'horizon' },
-      { lbl:'VaR 95%',        val: var95Pct.toFixed(1)+'%', sub:'perte probable',           pct:r2, desc:'Perte max probable à 95% (GBM)' },
-      { lbl:'P(perte)',        val: pLoss.toFixed(1)+'%',    sub:'sim. Monte Carlo',         pct:r3, desc:'% simulations terminant sous P₀' },
-      { lbl:'Drawdown max',   val: maxDDpct.toFixed(1)+'%', sub:'historique',               pct:r4, desc:'Pire repli observé sur l\'historique' },
-      { lbl:'Momentum',       val: model.rsi.toFixed(0),    sub:'RSI · μ='+(mu*100).toFixed(3)+'%', pct:r5, desc:'RSI + drift empirique' },
+      { lbl:'Vol. σ√T',          val: sigTPct.toFixed(1)+'%',      sub:'sur '+horizon+'j',                   pct:r1, desc:"Volatilité cumulée sur l'horizon" },
+      { lbl:'VaR 95%',           val: var95Pct.toFixed(1)+'%',     sub:'perte probable',                      pct:r2, desc:'Perte max probable à 95% (GBM)' },
+      { lbl:'P(perte)',           val: pLoss.toFixed(1)+'%',        sub:'sim. Monte Carlo',                    pct:r3, desc:'% simulations terminant sous P₀' },
+      { lbl:'Perte espérée',     val: avgLoss.toFixed(1)+'%',      sub:'EL / P₀',                             pct:r4, desc:'Perte moyenne pondérée (Expected Loss)' },
+      { lbl:'Momentum',           val: model.rsi.toFixed(0),        sub:'RSI · μ='+(mu*100).toFixed(3)+'%/j', pct:r5, desc:'RSI + drift annualisé' },
+      { lbl:'Consensus baissier', val: bearSignals+'/'+totalSignals, sub:'signaux',                            pct:r6, desc:'Convergence des indicateurs directionnels' },
     ],
-    weights:{ w1,w2,w3,w4,w5 },
-    var95Pct, pLoss, sigTPct, maxDDpct,
+    weights:{ w1,w2,w3,w4,w5,w6 },
+    var95Pct, pLoss, sigTPct, avgLoss,
   };
 }
 
@@ -1079,7 +1097,7 @@ function renderRisk(risk, horizon){
 
   // ── Barres de contribution ───────────────────────────────────────
   const w = risk.weights;
-  const wArr = [w.w1,w.w2,w.w3,w.w4,w.w5];
+  const wArr = [w.w1,w.w2,w.w3,w.w4,w.w5,w.w6];
   document.getElementById('riskMeters').innerHTML = risk.components.map((c,i) => {
     const col   = c.pct >= 75 ? '#ff5a5a' : c.pct >= 50 ? '#f0c040' : c.pct >= 25 ? '#48c778' : '#5aa0ff';
     const wPct  = (wArr[i]*100).toFixed(0);
@@ -1095,15 +1113,15 @@ function renderRisk(risk, horizon){
   }).join('');
 
   // ── Note contextuelle horizon ────────────────────────────────────
-  const hNote = horizon <= 5  ? '⚡ Horizon très court — la volatilité intra-day domine, les bandes sont larges.'
-              : horizon <= 15 ? '📅 Horizon court — momentum et VaR sont les facteurs clés.'
-              : horizon <= 30 ? '📆 Horizon moyen — σ√T et probabilité de perte prennent de l\'importance.'
-              :                  '🗓 Horizon long — la volatilité cumulée σ√T et le drawdown historique dominent le risque.';
+  const hNote = horizon <= 5  ? '⚡ Horizon très court — VaR et momentum dominent, sensibilité élevée au drift.'
+              : horizon <= 15 ? '📅 Horizon court — la probabilité de perte et le momentum sont les facteurs clés.'
+              : horizon <= 30 ? '📆 Horizon moyen — P(perte) et perte espérée prennent de l\'importance.'
+              :                  '🗓 Horizon long — la perte espérée (EL) et σ√T dominent ; un drift négatif est très pénalisant.';
 
   document.getElementById('riskHorizonNote').innerHTML = `
     <span>${hNote}</span>
-    <span><strong>σ√T = ${risk.sigTPct.toFixed(1)}%</strong> — fourchette probable ±${risk.sigTPct.toFixed(1)}% autour du prix médian</span>
-    <span><strong>VaR 95% = ${risk.var95Pct.toFixed(1)}%</strong> — perte max probable sur ${horizon}j</span>
+    <span><strong>P(perte) = ${risk.pLoss.toFixed(1)}%</strong> — probabilité de terminer sous P₀ sur ${horizon}j</span>
+    <span><strong>EL = ${risk.avgLoss.toFixed(1)}%</strong> — perte moyenne attendue / VaR 95% = ${risk.var95Pct.toFixed(1)}%</span>
   `;
 }
 
