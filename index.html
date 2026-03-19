@@ -37,17 +37,17 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
 .nav-tab:hover{color:var(--mid)}
 .nav-tab.active{color:var(--bright);border-bottom-color:var(--neu)}
 
-.page{max-width:1100px;margin:0 auto;padding:16px 16px 48px}
+.page{max-width:1100px;margin:0 auto;padding:16px 16px 48px;overflow-x:hidden}
 .panel{display:none}.panel.active{display:block}
 .slabel{font-size:9px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);margin-bottom:10px;display:flex;align-items:center;gap:8px}
 .slabel::after{content:'';flex:1;height:1px;background:var(--line)}
 
 /* INPUT GRID */
-.input-grid{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);border:1px solid var(--line);margin-bottom:20px}
+.input-grid{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);border:1px solid var(--line);margin-bottom:20px;width:100%}
 @media(max-width:700px){.input-grid{grid-template-columns:1fr}}
-.input-section{background:var(--bg1);padding:14px 16px}
+.input-section{background:var(--bg1);padding:14px 16px;min-width:0}
 .input-section-title{font-size:8px;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);margin-bottom:14px;padding-bottom:8px;border-bottom:1px solid var(--line)}
-.field{margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:nowrap}
+.field{margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:nowrap;min-width:0}
 .field:last-child{margin-bottom:0}
 .field label{font-size:9px;letter-spacing:.08em;color:var(--dim);min-width:140px;flex-shrink:0}
 .field input[type=text],.field input[type=number]{background:var(--bg2);border:1px solid var(--line2);color:var(--bright);font-family:var(--font);font-size:11px;padding:7px 8px;width:100%;outline:none;transition:border-color .15s;min-width:0;flex:1}
@@ -55,6 +55,7 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
 @media(max-width:480px){
   .field{flex-direction:column;align-items:stretch;gap:5px}
   .field label{min-width:unset;width:100%}
+  .input-section{padding:12px 12px}
 }
 
 /* PRICE TABLE */
@@ -290,7 +291,7 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;background:var(--brig
   <!-- FMP FETCH -->
   <div class="slabel" style="margin-top:4px">Live Data Feed <span style="font-size:8px;letter-spacing:.04em;text-transform:none;color:var(--dim);margin-left:6px">Financial Modeling Prep · clé gratuite sur financialmodelingprep.com (250 req/jour)</span></div>
   <div class="fetch-block">
-    <input type="text" id="yApiKey" placeholder="Clé API FMP (gratuite)" style="width:200px" title="Obtenez votre clé gratuite sur financialmodelingprep.com/register">
+    <input type="text" id="yApiKey" placeholder="Clé API FMP (gratuite)" title="Obtenez votre clé gratuite sur financialmodelingprep.com/register">
     <input type="text" id="yTicker" value="AAPL" placeholder="AAPL" maxlength="12" title="Ex: AAPL, MC.PA, BNP.PA, IBM">
     <select id="yPeriod">
       <option value="30">30 jours</option>
