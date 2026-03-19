@@ -204,9 +204,8 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;background:var(--brig
 .risk-score-num{font-family:var(--sans);font-size:52px;font-weight:300;line-height:1;letter-spacing:-.03em}
 .risk-score-label{font-size:8px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted)}
 .risk-verdict{font-size:10px;font-weight:500;letter-spacing:.1em;padding:3px 10px;border:1px solid currentColor;text-transform:uppercase}
-.risk-body{display:grid;grid-template-columns:repeat(6,1fr);gap:0;border-bottom:1px solid var(--line)}
-@media(max-width:900px){.risk-body{grid-template-columns:repeat(3,1fr)}}
-@media(max-width:400px){.risk-body{grid-template-columns:repeat(2,1fr)}}
+.risk-body{display:grid;grid-template-columns:repeat(4,1fr);gap:0;border-bottom:1px solid var(--line)}
+@media(max-width:700px){.risk-body{grid-template-columns:repeat(2,1fr)}}
 .risk-metric{padding:10px 12px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);position:relative}
 .risk-metric:last-child{border-right:none}
 .risk-metric::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--mc,var(--line2))}
@@ -769,85 +768,62 @@ function getBands(P0,days,mu,sig,ac,N){
 function calcConfidence(model, autocorr, horizon){
   const lr  = model.hist.slice(1).map((p,i) => Math.log(p / model.hist[i]));
   const N   = lr.length;
-  const mu  = model.mu;
   const sig = model.sigma;
 
-  // Statistiques de base des log-returns (nécessaires à plusieurs composantes)
-  const lr_mean = lr.reduce((s,v) => s + v, 0) / Math.max(N, 1);
-  const ss_tot  = lr.reduce((s,v) => s + (v - lr_mean)**2, 0);
-  const lr_std  = Math.sqrt(ss_tot / Math.max(N - 1, 1));
+  const lrMean = lr.reduce((s,v) => s+v, 0) / Math.max(N, 1);
+  const lrVar  = lr.reduce((s,v) => s+(v-lrMean)**2, 0) / Math.max(N-1, 1);
+  const lrStd  = Math.sqrt(lrVar);
 
-  // ── 1. Précision de μ̂ — IC 95% relatif au signal ───────────────
-  // IC_half = 1.96 * σ/√N  ;  signal = |μ| + σ  (évite /0 si μ≈0)
-  // Ratio faible → μ précisément estimé → score élevé
-  const ic_half  = 1.96 * sig / Math.sqrt(Math.max(N, 1));
-  const signal   = Math.abs(mu) + sig;
-  const ic_ratio = ic_half / signal;
-  const s1_raw   = Math.max(0, 100 * (1 - ic_ratio / 1.5));
-  const s1       = s1_raw * 0.25;
+  // ── 1. Volume de données (25%) ───────────────────────────────────
+  // N=10→13, N=30→39, N=60→63, N=120→86, N=252→98
+  const s1_raw = Math.min(100, 100 * (1 - Math.exp(-N / 60)));
+  const s1     = s1_raw * 0.25;
 
-  // ── 2. Signal/Bruit — t-stat de μ̂ ─────────────────────────────
-  // t = |μ_lr| / (σ_lr/√N)  → Sharpe journalier × √N
-  // En finance, t~0.2 est typique même pour un bon actif.
-  // Seuils réalistes : t=0 → 0, t=0.5 → 50, t=1 → 100
-  let s2_raw;
-  if(Math.abs(lr_mean) < lr_std * 0.05){
-    // Drift quasi-nul → cohérence directionnelle : % jours dans le sens du drift
-    // 50% = aléatoire pur → 0 ; 60% = bon signal → 100
-    const sign = lr_mean >= 0 ? 1 : -1;
-    const consistent = lr.filter(r => r * sign > 0).length;
-    s2_raw = Math.max(0, (consistent / Math.max(N,1) - 0.5) / 0.15 * 100);
-  } else {
-    const t_abs = Math.abs(lr_mean) / (lr_std / Math.sqrt(Math.max(N, 1)));
-    // t=0→0, t=0.5→50, t≥1→100  (seuils financièrement réalistes)
-    s2_raw = Math.min(100, t_abs / 1.0 * 100);
-  }
-  const s2 = s2_raw * 0.20;
+  // ── 2. Précision de σ̂ — IC de l'écart-type (25%) ───────────────
+  // IC 95% de σ = σ × √(2/(N-1)) × 1.96
+  // N=10→8, N=30→49, N=60→64, N=120→75, N=252→83
+  const sigIC  = lrStd * Math.sqrt(2 / Math.max(N - 1, 1)) * 1.96;
+  const s2_raw = Math.max(0, 100 * (1 - sigIC / Math.max(lrStd, 1e-10)));
+  const s2     = s2_raw * 0.25;
 
-  // ── 3. Test Jarque-Bera — normalité des résidus ─────────────────
-  // JB = N/6 × (S² + K²/4)
-  // En finance, kurtosis excédentaire typique : 1–5 (fat tails normaux)
-  // Seuils réalistes : JB=0→100, JB=50→50, JB≥200→0
-  // On utilise log(1+JB) pour éviter l'explosion sur fat tails extrêmes
-  const mu3     = lr.reduce((s,v) => s + (v - lr_mean)**3, 0) / Math.max(N, 1);
-  const mu4     = lr.reduce((s,v) => s + (v - lr_mean)**4, 0) / Math.max(N, 1);
-  const skew    = lr_std > 0 ? mu3 / Math.pow(lr_std, 3) : 0;
-  const kurt_ex = lr_std > 0 ? mu4 / Math.pow(lr_std, 4) - 3 : 0;
-  const JB      = N > 3 ? (N / 6) * (skew**2 + kurt_ex**2 / 4) : 50;
-  // log(1+JB) : JB=0→0, JB=50→3.9, JB=200→5.3 — normalise sur log(201)≈5.3
-  const s3_raw  = Math.max(0, 100 * (1 - Math.log(1 + JB) / Math.log(201)));
+  // ── 3. Fat Tails — kurtosis excédentaire (20%) ───────────────────
+  // kurt=0→100, kurt=2→67, kurt=5→37, kurt=10→14
+  const mu4     = lr.reduce((s,v) => s+(v-lrMean)**4, 0) / Math.max(N, 1);
+  const mu3     = lr.reduce((s,v) => s+(v-lrMean)**3, 0) / Math.max(N, 1);
+  const kurt_ex = lrStd > 0 ? mu4 / Math.pow(lrStd, 4) - 3 : 0;
+  const skew    = lrStd > 0 ? mu3 / Math.pow(lrStd, 3) : 0;
+  const s3_raw  = Math.round(100 * Math.exp(-Math.sqrt(Math.abs(kurt_ex)) * 0.4));
   const s3      = s3_raw * 0.20;
 
-  // ── 4. Stabilité de la variance — EWMA vs historique ────────────
-  // Modèle RiskMetrics (λ=0.94) : σ²_t = λσ²_{t-1} + (1-λ)r²_t
-  // ratio ≈ 1 → régime stable  ;  ratio ≠ 1 → changement de vol
-  const lambda  = 0.94;
-  let ewmaVar   = lr.slice(0, 5).reduce((s,v) => s + v**2, 0) / 5 || sig**2;
-  for(let i = 5; i < lr.length; i++)
-    ewmaVar = lambda * ewmaVar + (1 - lambda) * lr[i]**2;
-  const sig_ewma  = Math.sqrt(ewmaVar);
-  const ratio     = sig > 0 ? sig_ewma / sig : 1;
-  const s4_raw    = Math.max(0, 100 - Math.abs(ratio - 1) * 100);
-  const s4        = s4_raw * 0.20;
+  // ── 4. Stationnarité — EWMA vs historique (20%) ──────────────────
+  // ratio≈1 → régime stable → paramètres fiables
+  let ewmaVar  = lrVar;
+  for(const r of lr) ewmaVar = 0.94 * ewmaVar + 0.06 * r * r;
+  const sigEwma = Math.sqrt(ewmaVar);
+  const ratio   = sig > 0 ? sigEwma / sig : 1;
+  const s4_raw  = Math.max(0, 100 - Math.abs(ratio - 1) * 120);
+  const s4      = s4_raw * 0.20;
 
-  // ── 5. CV log-normal sur l'horizon T ────────────────────────────
-  // CV(T) = √(exp(σ²T) - 1)  → incertitude relative exacte (log-normal)
-  // CV=0 → parfait  ;  CV=1 (100%) → très incertain
-  const cv      = Math.sqrt(Math.max(0, Math.exp(sig * sig * horizon) - 1));
-  const s5_raw  = Math.max(0, 100 * (1 - cv));
-  const s5      = s5_raw * 0.15;
+  // ── 5. Dégradation temporelle σ√T (10%) ─────────────────────────
+  // Plus l'horizon est long et la vol élevée, plus la prédiction se dégrade.
+  // Formule : 100 × exp(-σ√T × 4)
+  // σ=1.5% T=5j→94, T=20j→80, T=60j→68
+  // σ=3%   T=5j→87, T=20j→64, T=60j→46
+  // Capture que prédire à 60j sur un actif volatile est peu fiable
+  const sigT   = sig * Math.sqrt(horizon);
+  const s5_raw = Math.round(100 * Math.exp(-sigT * 4));
+  const s5     = s5_raw * 0.10;
 
   const total = Math.max(1, Math.min(100, Math.round(s1 + s2 + s3 + s4 + s5)));
-  const tStr  = lr_mean >= 0 ? '+' + lr_mean.toFixed(5) : lr_mean.toFixed(5);
 
   return {
     total, horizon,
     components: [
-      { lbl:'Précision μ̂ (IC/signal)',   score:Math.round(s1_raw), weight:25, raw:'IC±'+ic_half.toFixed(4),              unit:'ratio='+ic_ratio.toFixed(2) },
-      { lbl:'Signal/Bruit (t-stat)',      score:Math.round(s2_raw), weight:20, raw:'μ='+tStr,                             unit:'σ='+lr_std.toFixed(4) },
-      { lbl:'Normalité résidus (JB)',     score:Math.round(s3_raw), weight:20, raw:'JB='+JB.toFixed(2),                   unit:'S='+skew.toFixed(2) },
-      { lbl:'Stabilité vol (EWMA/hist)',  score:Math.round(s4_raw), weight:20, raw:'σ_ew='+(sig_ewma*100).toFixed(2)+'%', unit:'ratio='+ratio.toFixed(2) },
-      { lbl:'CV(T) log-normal',           score:Math.round(s5_raw), weight:15, raw:'CV='+(cv*100).toFixed(1)+'%',         unit:'J+'+horizon },
+      { lbl:'Volume données (N)',    score:Math.round(s1_raw), weight:25, raw:'N='+N+' obs',                          unit:'w='+(model.w_hist*100).toFixed(0)+'%' },
+      { lbl:'Précision σ̂ (IC)',     score:Math.round(s2_raw), weight:25, raw:'IC=±'+(sigIC*100).toFixed(3)+'%',     unit:'σ='+(lrStd*100).toFixed(2)+'%' },
+      { lbl:'Fat Tails (kurtosis)',  score:Math.round(s3_raw), weight:20, raw:'kurt='+kurt_ex.toFixed(2),               unit:'skew='+skew.toFixed(2) },
+      { lbl:'Stationnarité (EWMA)',  score:Math.round(s4_raw), weight:20, raw:'σ_ew='+(sigEwma*100).toFixed(2)+'%',  unit:'ratio='+ratio.toFixed(2) },
+      { lbl:'Dégradation σ√T',       score:Math.round(s5_raw), weight:10, raw:'σ√T='+(sigT*100).toFixed(1)+'%',      unit:'J+'+horizon },
     ]
   };
 }
@@ -983,98 +959,74 @@ function runModel(){
    5. Régime de tendance + RSI       → momentum risk
 ══════════════════════════════════════════ */
 function calcRisk(model, autocorr, horizon, simFinals){
-  const sig     = model.sigma;
-  const sigT    = sig * Math.sqrt(horizon);
-  const P0      = model.P0;
-  const mu      = model.mu;
+  const sig   = model.sigma;
+  const sigT  = sig * Math.sqrt(horizon);
+  const P0    = model.P0;
+  const mu    = model.mu;
 
-  // ── 1. Volatilité temporelle (σ√T) ─────────────────────────────
-  const sigTPct = sigT * 100;
-  const r1 = Math.min(100, sigTPct / 40 * 100);
+  // ── 1. VaR 95% analytique log-normale (25%) ─────────────────────
+  // Perte maximale probable à 95% sous hypothèse GBM
+  const varRet = Math.exp((mu - 0.5*sig*sig)*horizon - 1.645*sigT) - 1;
+  const var95  = Math.max(0, -varRet * 100);
+  const r1     = Math.min(100, var95 / 40 * 100);
 
-  // ── 2. VaR 95% analytique (log-normal GBM) ─────────────────────
-  const varReturn = Math.exp((mu - 0.5*sig*sig)*horizon - 1.645*sigT) - 1;
-  const var95Pct  = Math.max(0, -varReturn * 100);
-  const r2 = Math.min(100, var95Pct / 50 * 100);
+  // ── 2. Expected Shortfall 95% — CVaR (25%) ──────────────────────
+  // Moyenne des pertes dans le pire 5% des simulations
+  // Plus conservatrice que la VaR : capture l'amplitude des queues
+  const sorted  = [...simFinals].sort((a,b) => a-b);
+  const cutIdx  = Math.max(1, Math.floor(0.05 * sorted.length));
+  const tailLoss = sorted.slice(0, cutIdx).reduce((s,v) => s + Math.max(0, P0-v), 0)
+                   / cutIdx / P0 * 100;
+  const r2 = Math.min(100, tailLoss / 50 * 100);
 
-  // ── 3. Probabilité de perte P(PT < P0) — Monte Carlo ───────────
+  // ── 3. Probabilité de perte P(PT < P0) — Monte Carlo (25%) ──────
+  // Fraction de simulations terminant sous le prix d'entrée
   // Echelle directe : 0%→0, 50%→50, 100%→100
   const pLoss = simFinals.filter(v => v < P0).length / simFinals.length * 100;
-  const r3 = pLoss;
+  const r3    = pLoss;
 
-  // ── 4. Perte espérée (Expected Loss) ───────────────────────────
-  // Moyenne des pertes simulées normalisée par P0
-  // Capture l'amplitude de la perte, pas juste la probabilité
-  const avgLoss = simFinals.reduce((s,v) => s + Math.max(0, P0 - v), 0)
-                  / simFinals.length / P0 * 100;
-  const r4 = Math.min(100, avgLoss / 50 * 100);
+  // ── 4. Consensus directionnel (25%) ─────────────────────────────
+  // Convergence de 5 indicateurs indépendants sur la direction baissière :
+  // μ<0, slope<0, RSI<50, P(perte)>50%, drift annualisé <-5%
+  // 0/5 = tous haussiers, 5/5 = tous baissiers
+  let bear = 0;
+  if(mu < 0)             bear++;
+  if(model.slope < 0)    bear++;
+  if(model.rsi < 50)     bear++;
+  if(pLoss > 50)         bear++;
+  if(mu * 252 < -0.05)   bear++;
+  const r4 = bear / 5 * 100;
 
-  // ── 5. Momentum directionnel (RSI + drift annualisé) ───────────
-  const rsiRisk  = model.rsi > 70 ? (model.rsi - 70)/30*100
-                 : model.rsi < 30 ? (30 - model.rsi)/30*60
-                 : 20;
-  const driftRisk = mu < 0
-    ? Math.min(100, Math.abs(mu) * 252 / 0.50 * 100)
-    : Math.max(0, 10 - mu * 252 / 0.10 * 10);
-  const r5 = Math.min(100, rsiRisk * 0.4 + driftRisk * 0.6);
+  // ── Score composite (pondérations égales) ───────────────────────
+  const raw  = r1*0.25 + r2*0.25 + r3*0.25 + r4*0.25;
 
-  // ── 6. Consensus directionnel ───────────────────────────────────
-  // Compte les indicateurs indépendants pointant à la baisse :
-  // μ<0, slope<0, RSI<50, P(perte)>50, drift annualisé < -10%
-  // Convergence totale = risque maximal confirmé par plusieurs sources
-  let bearSignals = 0;
-  const totalSignals = 5;
-  if(mu < 0)              bearSignals++;
-  if(model.slope < 0)     bearSignals++;
-  if(model.rsi < 50)      bearSignals++;
-  if(pLoss > 50)          bearSignals++;
-  if(mu * 252 < -0.10)    bearSignals++;
-  const r6 = (bearSignals / totalSignals) * 100;
+  // Multiplicateur de convergence baissière
+  // S'active quand ≥4 signaux sont baissiers ET P(perte)>65% ET μ<0
+  const allBearish  = bear >= 4 && pLoss > 65 && mu < 0;
+  const mult        = allBearish ? 1 + (bear / 5) * 0.20 : 1;
+  const score       = Math.round(Math.min(99, Math.max(1, raw * mult)));
 
-  // ── Pondérations dépendantes de l'horizon ───────────────────────
-  const hRatio = Math.min(1, horizon / 60);
-  const w1 = 0.07 + 0.06 * hRatio;   // σ√T : 7% → 13%
-  const w2 = 0.12 - 0.04 * hRatio;   // VaR 95% : 12% → 8%
-  const w3 = 0.28 + 0.05 * hRatio;   // P(perte) : 28% → 33%  ← dominant
-  const w4 = 0.12 + 0.08 * hRatio;   // EL : 12% → 20%
-  const w5 = 0.13 - 0.03 * hRatio;   // Momentum : 13% → 10%
-  const w6 = 0.28 - 0.12 * hRatio;   // Consensus : 28% → 16%
-
-  const raw = r1*w1 + r2*w2 + r3*w3 + r4*w4 + r5*w5 + r6*w6;
-
-  // ── Multiplicateur consensus complet ───────────────────────────
-  // Si tous les signaux pointent à la baisse ET P(perte) élevée
-  // → amplification vers le haut de l'échelle
-  const allBearish = bearSignals >= 4 && pLoss > 60 && mu < 0;
-  const lossCertainty = allBearish
-    ? 1 + (bearSignals / totalSignals) * 0.25
-    : 1;
-
-  const score = Math.round(Math.min(99, Math.max(1, raw * lossCertainty)));
-
-  const verdict = score >= 80 ? 'TRÈS ÉLEVÉ'
-                : score >= 62 ? 'ÉLEVÉ'
-                : score >= 44 ? 'MODÉRÉ'
-                : score >= 25 ? 'FAIBLE'
+  const verdict = score >= 70 ? 'TRÈS ÉLEVÉ'
+                : score >= 50 ? 'ÉLEVÉ'
+                : score >= 30 ? 'MODÉRÉ'
+                : score >= 15 ? 'FAIBLE'
                 :               'TRÈS FAIBLE';
 
-  const color = score >= 62 ? '#ff5a5a'
-              : score >= 44 ? '#f0c040'
-              : score >= 25 ? '#48c778'
+  const color = score >= 50 ? '#ff5a5a'
+              : score >= 30 ? '#f0c040'
+              : score >= 15 ? '#48c778'
               :               '#5aa0ff';
 
   return {
     score, verdict, color,
     components: [
-      { lbl:'Vol. σ√T',          val: sigTPct.toFixed(1)+'%',      sub:'sur '+horizon+'j',                   pct:r1, desc:"Volatilité cumulée sur l'horizon" },
-      { lbl:'VaR 95%',           val: var95Pct.toFixed(1)+'%',     sub:'perte probable',                      pct:r2, desc:'Perte max probable à 95% (GBM)' },
-      { lbl:'P(perte)',           val: pLoss.toFixed(1)+'%',        sub:'sim. Monte Carlo',                    pct:r3, desc:'% simulations terminant sous P₀' },
-      { lbl:'Perte espérée',     val: avgLoss.toFixed(1)+'%',      sub:'EL / P₀',                             pct:r4, desc:'Perte moyenne pondérée (Expected Loss)' },
-      { lbl:'Momentum',           val: model.rsi.toFixed(0),        sub:'RSI · μ='+(mu*100).toFixed(3)+'%/j', pct:r5, desc:'RSI + drift annualisé' },
-      { lbl:'Consensus baissier', val: bearSignals+'/'+totalSignals, sub:'signaux',                            pct:r6, desc:'Convergence des indicateurs directionnels' },
+      { lbl:'VaR 95%',            val: var95.toFixed(1)+'%',       sub:'perte probable',                    pct:r1, desc:'Perte max probable à 95% — GBM analytique' },
+      { lbl:'CVaR / ES 95%',      val: tailLoss.toFixed(1)+'%',    sub:'perte extrême moy.',                pct:r2, desc:'Expected Shortfall : moyenne des pires 5%' },
+      { lbl:'P(perte)',            val: pLoss.toFixed(1)+'%',       sub:'Monte Carlo',                       pct:r3, desc:'% simulations terminant sous P₀' },
+      { lbl:'Consensus baissier', val: bear+'/5',                   sub:'signaux',                           pct:r4, desc:'Convergence μ, slope, RSI, P(perte), drift/an' },
     ],
-    weights:{ w1,w2,w3,w4,w5,w6 },
-    var95Pct, pLoss, sigTPct, avgLoss,
+    weights:{ w1:0.25, w2:0.25, w3:0.25, w4:0.25 },
+    var95Pct:var95, pLoss, sigTPct:sigT*100, avgLoss:tailLoss,
   };
 }
 
@@ -1097,7 +1049,7 @@ function renderRisk(risk, horizon){
 
   // ── Barres de contribution ───────────────────────────────────────
   const w = risk.weights;
-  const wArr = [w.w1,w.w2,w.w3,w.w4,w.w5,w.w6];
+  const wArr = [w.w1,w.w2,w.w3,w.w4];
   document.getElementById('riskMeters').innerHTML = risk.components.map((c,i) => {
     const col   = c.pct >= 75 ? '#ff5a5a' : c.pct >= 50 ? '#f0c040' : c.pct >= 25 ? '#48c778' : '#5aa0ff';
     const wPct  = (wArr[i]*100).toFixed(0);
