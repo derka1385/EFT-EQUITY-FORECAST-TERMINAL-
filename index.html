@@ -47,11 +47,15 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
 @media(max-width:700px){.input-grid{grid-template-columns:1fr}}
 .input-section{background:var(--bg1);padding:14px 16px}
 .input-section-title{font-size:8px;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);margin-bottom:14px;padding-bottom:8px;border-bottom:1px solid var(--line)}
-.field{margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.field{margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:nowrap}
 .field:last-child{margin-bottom:0}
-.field label{font-size:9px;letter-spacing:.08em;color:var(--dim);min-width:120px;flex-shrink:0}
-.field input[type=text],.field input[type=number]{background:var(--bg2);border:1px solid var(--line2);color:var(--bright);font-family:var(--font);font-size:11px;padding:5px 8px;width:100%;outline:none;transition:border-color .15s;min-width:0}
+.field label{font-size:9px;letter-spacing:.08em;color:var(--dim);min-width:140px;flex-shrink:0}
+.field input[type=text],.field input[type=number]{background:var(--bg2);border:1px solid var(--line2);color:var(--bright);font-family:var(--font);font-size:11px;padding:7px 8px;width:100%;outline:none;transition:border-color .15s;min-width:0;flex:1}
 .field input:focus{border-color:var(--neu)}
+@media(max-width:480px){
+  .field{flex-direction:column;align-items:stretch;gap:5px}
+  .field label{min-width:unset;width:100%}
+}
 
 /* PRICE TABLE */
 .price-table-wrap{background:var(--bg1);border:1px solid var(--line);margin-bottom:20px;overflow-x:auto}
@@ -762,90 +766,87 @@ function getBands(P0,days,mu,sig,ac,N){
       Plus CV est élevé, moins la prédiction est précise
 ══════════════════════════════════════════ */
 function calcConfidence(model, autocorr, horizon){
-  const lr   = model.hist.slice(1).map((p,i) => Math.log(p / model.hist[i]));
-  const N    = lr.length;
-  const mu   = model.mu;
-  const sig  = model.sigma;
+  const lr  = model.hist.slice(1).map((p,i) => Math.log(p / model.hist[i]));
+  const N   = lr.length;
+  const mu  = model.mu;
+  const sig = model.sigma;
 
-  // ── 1. Précision de μ̂ — Intervalle de Confiance relatif ────────
-  // IC 95% : ±1.96 * σ/√N
-  // On mesure la largeur de l'IC relativement à l'amplitude du signal
-  // signal = |μ| + σ (pour éviter division par zéro si μ≈0)
-  // Ratio = (IC_half) / (|μ| + σ)
-  // Ratio petit → μ bien estimé → score élevé
+  // Statistiques de base des log-returns (nécessaires à plusieurs composantes)
+  const lr_mean = lr.reduce((s,v) => s + v, 0) / Math.max(N, 1);
+  const ss_tot  = lr.reduce((s,v) => s + (v - lr_mean)**2, 0);
+  const lr_std  = Math.sqrt(ss_tot / Math.max(N - 1, 1));
+
+  // ── 1. Précision de μ̂ — IC 95% relatif au signal ───────────────
+  // IC_half = 1.96 * σ/√N  ;  signal = |μ| + σ  (évite /0 si μ≈0)
+  // Ratio faible → μ précisément estimé → score élevé
   const ic_half  = 1.96 * sig / Math.sqrt(Math.max(N, 1));
   const signal   = Math.abs(mu) + sig;
-  const ic_ratio = ic_half / signal;                      // 0=parfait, >2=inutile
+  const ic_ratio = ic_half / signal;
   const s1_raw   = Math.max(0, 100 * (1 - ic_ratio / 1.5));
   const s1       = s1_raw * 0.25;
 
-  // ── 2. R² des log-returns sur le drift (OLS) ────────────────────
-  // yi = μ + εi  → R² = 1 - SS_res/SS_tot
-  // SS_tot = Σ(yi - ȳ)²  SS_res = Σ(yi - μ̂)²
-  // Un R² élevé = drift explique bien les variations = modèle stable
-  const lr_mean  = lr.reduce((s,v) => s+v, 0) / Math.max(N,1);
-  const ss_tot   = lr.reduce((s,v) => s + (v - lr_mean)**2, 0);
-  const ss_res   = lr.reduce((s,v) => s + (v - mu)**2, 0);
-  const r2       = ss_tot > 0 ? Math.max(0, 1 - ss_res / ss_tot) : 0;
-  // R² financier est typiquement très faible (0–10%) → on normalise sur 0.25
-  const s2_raw   = Math.min(100, r2 / 0.25 * 100);
-  const s2       = s2_raw * 0.20;
+  // ── 2. Signal/Bruit — t-stat de μ̂ ─────────────────────────────
+  // t = |μ_lr| / (σ_lr/√N)  → Sharpe journalier × √N
+  // En finance, t~0.2 est typique même pour un bon actif.
+  // Seuils réalistes : t=0 → 0, t=0.5 → 50, t=1 → 100
+  let s2_raw;
+  if(Math.abs(lr_mean) < lr_std * 0.05){
+    // Drift quasi-nul → cohérence directionnelle : % jours dans le sens du drift
+    // 50% = aléatoire pur → 0 ; 60% = bon signal → 100
+    const sign = lr_mean >= 0 ? 1 : -1;
+    const consistent = lr.filter(r => r * sign > 0).length;
+    s2_raw = Math.max(0, (consistent / Math.max(N,1) - 0.5) / 0.15 * 100);
+  } else {
+    const t_abs = Math.abs(lr_mean) / (lr_std / Math.sqrt(Math.max(N, 1)));
+    // t=0→0, t=0.5→50, t≥1→100  (seuils financièrement réalistes)
+    s2_raw = Math.min(100, t_abs / 1.0 * 100);
+  }
+  const s2 = s2_raw * 0.20;
 
-  // ── 3. Test Jarque-Bera (normalité des résidus) ─────────────────
-  // JB = N/6 * (S² + K²/4)  où S=skewness, K=excess kurtosis
-  // Si JB ≈ 0 → résidus normaux → GBM valide
-  // Si JB élevé → fat tails / asymétrie → GBM moins fiable
-  const mu4      = lr.reduce((s,v) => s + (v - lr_mean)**4, 0) / Math.max(N,1);
-  const mu3      = lr.reduce((s,v) => s + (v - lr_mean)**3, 0) / Math.max(N,1);
-  const sig4     = Math.pow(sig, 4);
-  const sig3     = Math.pow(sig, 3);
-  const skew     = sig3 > 0 ? mu3 / sig3 : 0;
-  const kurt_ex  = sig4 > 0 ? mu4 / sig4 - 3 : 0;   // excès par rapport à 3
-  const JB       = N > 3 ? (N / 6) * (skew**2 + kurt_ex**2 / 4) : 50;
-  // Normalise : JB=0 → 100, JB=10 → 50, JB≥50 → 0
-  const s3_raw   = Math.max(0, 100 - Math.min(JB, 50) * 2);
-  const s3       = s3_raw * 0.20;
+  // ── 3. Test Jarque-Bera — normalité des résidus ─────────────────
+  // JB = N/6 × (S² + K²/4)
+  // En finance, kurtosis excédentaire typique : 1–5 (fat tails normaux)
+  // Seuils réalistes : JB=0→100, JB=50→50, JB≥200→0
+  // On utilise log(1+JB) pour éviter l'explosion sur fat tails extrêmes
+  const mu3     = lr.reduce((s,v) => s + (v - lr_mean)**3, 0) / Math.max(N, 1);
+  const mu4     = lr.reduce((s,v) => s + (v - lr_mean)**4, 0) / Math.max(N, 1);
+  const skew    = lr_std > 0 ? mu3 / Math.pow(lr_std, 3) : 0;
+  const kurt_ex = lr_std > 0 ? mu4 / Math.pow(lr_std, 4) - 3 : 0;
+  const JB      = N > 3 ? (N / 6) * (skew**2 + kurt_ex**2 / 4) : 50;
+  // log(1+JB) : JB=0→0, JB=50→3.9, JB=200→5.3 — normalise sur log(201)≈5.3
+  const s3_raw  = Math.max(0, 100 * (1 - Math.log(1 + JB) / Math.log(201)));
+  const s3      = s3_raw * 0.20;
 
-  // ── 4. Stabilité de la variance (EWMA vs historique) ────────────
-  // σ_EWMA(λ=0.94) : modèle RiskMetrics JP Morgan
-  // σ²_t = λ*σ²_{t-1} + (1-λ)*r²_t
-  // Compare la vol récente (EWMA) à la vol historique totale
-  // ratio ≈ 1 → régime stable → score élevé
-  const lambda   = 0.94;
-  let ewmaVar    = lr.slice(0,5).reduce((s,v) => s + v**2, 0) / 5 || sig**2;
+  // ── 4. Stabilité de la variance — EWMA vs historique ────────────
+  // Modèle RiskMetrics (λ=0.94) : σ²_t = λσ²_{t-1} + (1-λ)r²_t
+  // ratio ≈ 1 → régime stable  ;  ratio ≠ 1 → changement de vol
+  const lambda  = 0.94;
+  let ewmaVar   = lr.slice(0, 5).reduce((s,v) => s + v**2, 0) / 5 || sig**2;
   for(let i = 5; i < lr.length; i++)
     ewmaVar = lambda * ewmaVar + (1 - lambda) * lr[i]**2;
-  const sig_ewma = Math.sqrt(ewmaVar);
-  const ratio    = sig > 0 ? sig_ewma / sig : 1;
-  // ratio=1 → 100, ratio=2 → 0, ratio=0.5 → penalisé aussi
-  const deviation = Math.abs(ratio - 1);
-  const s4_raw   = Math.max(0, 100 - deviation * 100);
-  const s4       = s4_raw * 0.20;
+  const sig_ewma  = Math.sqrt(ewmaVar);
+  const ratio     = sig > 0 ? sig_ewma / sig : 1;
+  const s4_raw    = Math.max(0, 100 - Math.abs(ratio - 1) * 100);
+  const s4        = s4_raw * 0.20;
 
-  // ── 5. Coefficient de Variation sur l'horizon CV(T) ─────────────
-  // E[P_T] ≈ P0 * exp(μ*T)
-  // Std[P_T] ≈ P0 * exp(μ*T) * √(exp(σ²*T) - 1)  (log-normal)
-  // CV(T) = Std/E = √(exp(σ²*T) - 1)
-  // CV petit → prédiction précise → score élevé
-  const T        = horizon;
-  const cv       = Math.sqrt(Math.max(0, Math.exp(sig*sig*T) - 1));
-  // CV=0 → 100, CV=1 (100%) → 0, CV≥2 → 0
-  const s5_raw   = Math.max(0, 100 * (1 - cv));
-  const s5       = s5_raw * 0.15;
+  // ── 5. CV log-normal sur l'horizon T ────────────────────────────
+  // CV(T) = √(exp(σ²T) - 1)  → incertitude relative exacte (log-normal)
+  // CV=0 → parfait  ;  CV=1 (100%) → très incertain
+  const cv      = Math.sqrt(Math.max(0, Math.exp(sig * sig * horizon) - 1));
+  const s5_raw  = Math.max(0, 100 * (1 - cv));
+  const s5      = s5_raw * 0.15;
 
-  const rawTotal = s1 + s2 + s3 + s4 + s5;
-  const total    = Math.max(1, Math.min(100, Math.round(rawTotal)));
-
-  const tStr     = (model.t_stat||0) >= 0 ? '+' + (model.t_stat||0).toFixed(2) : (model.t_stat||0).toFixed(2);
+  const total = Math.max(1, Math.min(100, Math.round(s1 + s2 + s3 + s4 + s5)));
+  const tStr  = lr_mean >= 0 ? '+' + lr_mean.toFixed(5) : lr_mean.toFixed(5);
 
   return {
     total, horizon,
     components: [
-      { lbl:'Précision de μ̂ (IC/signal)',  score:Math.round(s1_raw),  weight:25, raw:'IC±'+ic_half.toFixed(4),          unit:'ratio='+ic_ratio.toFixed(2) },
-      { lbl:'Stabilité drift (R²)',         score:Math.round(s2_raw),  weight:20, raw:'R²='+r2.toFixed(4),                unit:'t='+tStr },
-      { lbl:'Normalité résidus (JB)',       score:Math.round(s3_raw),  weight:20, raw:'JB='+JB.toFixed(2),                unit:'S='+skew.toFixed(2) },
-      { lbl:'Stabilité vol (EWMA/hist)',    score:Math.round(s4_raw),  weight:20, raw:'σ_ew='+( sig_ewma*100).toFixed(2)+'%', unit:'ratio='+ratio.toFixed(2) },
-      { lbl:'CV(T) log-normal',             score:Math.round(s5_raw),  weight:15, raw:'CV='+( cv*100).toFixed(1)+'%',     unit:'J+'+horizon },
+      { lbl:'Précision μ̂ (IC/signal)',   score:Math.round(s1_raw), weight:25, raw:'IC±'+ic_half.toFixed(4),              unit:'ratio='+ic_ratio.toFixed(2) },
+      { lbl:'Signal/Bruit (t-stat)',      score:Math.round(s2_raw), weight:20, raw:'μ='+tStr,                             unit:'σ='+lr_std.toFixed(4) },
+      { lbl:'Normalité résidus (JB)',     score:Math.round(s3_raw), weight:20, raw:'JB='+JB.toFixed(2),                   unit:'S='+skew.toFixed(2) },
+      { lbl:'Stabilité vol (EWMA/hist)',  score:Math.round(s4_raw), weight:20, raw:'σ_ew='+(sig_ewma*100).toFixed(2)+'%', unit:'ratio='+ratio.toFixed(2) },
+      { lbl:'CV(T) log-normal',           score:Math.round(s5_raw), weight:15, raw:'CV='+(cv*100).toFixed(1)+'%',         unit:'J+'+horizon },
     ]
   };
 }
