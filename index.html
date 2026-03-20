@@ -583,9 +583,8 @@ async function fetchData(){
   const now  = Math.floor(Date.now() / 1000);
   const from = now - (days + 14) * 86400;
 
-  // Finnhub accepte la clé en query param OU en header — on utilise les deux
-  const headers = { 'X-Finnhub-Token': apiKey };
-
+  // Token uniquement en query param — le header X-Finnhub-Token déclenche
+  // un preflight CORS OPTIONS que Finnhub ne gère pas depuis un browser
   const endpoints = {
     stock : `https://finnhub.io/api/v1/stock/candle?symbol=${encodeURIComponent(ticker)}&resolution=D&from=${from}&to=${now}&token=${encodeURIComponent(apiKey)}`,
     crypto: `https://finnhub.io/api/v1/crypto/candle?symbol=${encodeURIComponent(ticker)}&resolution=D&from=${from}&to=${now}&token=${encodeURIComponent(apiKey)}`,
@@ -593,7 +592,7 @@ async function fetchData(){
   };
 
   try{
-    const resp = await fetch(endpoints[type], { headers, signal: AbortSignal.timeout(12000) });
+    const resp = await fetch(endpoints[type], { signal: AbortSignal.timeout(12000) });
 
     // Finnhub peut retourner 403 sur certains symboles non couverts par le plan gratuit
     if(resp.status === 403) throw new Error(
