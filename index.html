@@ -290,13 +290,13 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;background:var(--brig
   <!-- FINNHUB FETCH -->
   <div class="slabel" style="margin-top:4px">Live Data Feed
     <span style="font-size:8px;letter-spacing:.04em;text-transform:none;color:var(--dim);margin-left:6px">
-      Finnhub · clé gratuite sur finnhub.io/register · Actions US/EU · Crypto · Forex · 60 req/min
+      Finnhub · clé gratuite sur finnhub.io/register · Actions US · Crypto · Forex · 60 req/min
     </span>
   </div>
   <div class="fetch-block">
     <input type="text" id="yApiKey" placeholder="Clé API Finnhub (gratuite)" title="Clé gratuite sur finnhub.io/register">
-    <input type="text" id="yTicker" value="AAPL" placeholder="AAPL" maxlength="20"
-      title="Actions: AAPL, MC.PA, BNP.PA | Crypto: BINANCE:BTCUSDT | Forex: OANDA:EUR_USD">
+    <input type="text" id="yTicker" value="AAPL" placeholder="AAPL" maxlength="25"
+      title="Actions US: AAPL TSLA MSFT | Crypto: BINANCE:BTCUSDT | Forex: OANDA:EUR_USD">
     <select id="yPeriod">
       <option value="30">30 jours</option>
       <option value="60" selected>60 jours</option>
@@ -533,34 +533,28 @@ function autoFillProbabilities(pairs){
 }
 
 /* ══════════════════════════════════════════
-   FINANCIAL MODELING PREP — fetch historique
-   API gratuite · 250 req/jour · CORS natif
-   Clé sur financialmodelingprep.com/register
-══════════════════════════════════════════ */
 /* ══════════════════════════════════════════
    FINNHUB — fetch historique OHLCV
    API gratuite · 60 req/min · CORS natif
    Clé sur finnhub.io/register
 
    Détection automatique du type d'actif :
-   • Crypto  → ticker contient ":"       ex: BINANCE:BTCUSDT
-   • Forex   → ticker contient "_"       ex: OANDA:EUR_USD
-   • Action  → tout le reste             ex: AAPL, MC.PA, BNP.PA
+   • Crypto  → ticker contient ":" ex: BINANCE:BTCUSDT
+   • Forex   → ticker contient "_" ex: OANDA:EUR_USD
+   • Action  → tout le reste       ex: AAPL, MC.PA, BNP.PA
 ══════════════════════════════════════════ */
 function setFetchStatus(msg, type){
   const el = document.getElementById('fetchStatus');
   if(!el) return;
-  el.textContent = msg;
-  el.className   = 'fetch-status ' + type;
+  el.textContent   = msg;
+  el.className     = 'fetch-status ' + type;
   el.style.display = 'inline-block';
 }
 
 function detectAssetType(ticker){
-  if(ticker.includes(':') && ticker.includes('USD') && !ticker.includes('.'))
-    return 'crypto';           // BINANCE:BTCUSDT, BINANCE:ETHUSDT…
-  if(ticker.includes(':') && ticker.includes('_'))
-    return 'forex';            // OANDA:EUR_USD, OANDA:GBP_USD…
-  return 'stock';              // AAPL, TSLA, MC.PA, BNP.PA…
+  if(ticker.includes(':') && !ticker.includes('.')) return 'crypto'; // BINANCE:BTCUSDT
+  if(ticker.includes('_'))                           return 'forex';  // OANDA:EUR_USD
+  return 'stock';
 }
 
 async function fetchData(){
@@ -575,7 +569,7 @@ async function fetchData(){
     return;
   }
   if(!ticker){
-    setFetchStatus('Entrez un ticker · ex : AAPL  MC.PA  BINANCE:BTCUSDT  OANDA:EUR_USD', 'err');
+    setFetchStatus('Entrez un ticker · Actions: AAPL MC.PA · Crypto: BINANCE:BTCUSDT · Forex: OANDA:EUR_USD', 'err');
     return;
   }
 
@@ -586,12 +580,12 @@ async function fetchData(){
   const labels = { stock:'Action', crypto:'Crypto', forex:'Forex' };
   setFetchStatus(`Connexion Finnhub (${labels[type]})…`, 'loading');
 
-  // Timestamps Unix (Finnhub utilise des secondes)
-  const now     = Math.floor(Date.now() / 1000);
-  const daysExt = days + 14;                     // marge weekends / jours fériés
-  const from    = now - daysExt * 86400;
+  const now  = Math.floor(Date.now() / 1000);
+  const from = now - (days + 14) * 86400;
 
-  // Endpoint selon le type d'actif
+  // Finnhub accepte la clé en query param OU en header — on utilise les deux
+  const headers = { 'X-Finnhub-Token': apiKey };
+
   const endpoints = {
     stock : `https://finnhub.io/api/v1/stock/candle?symbol=${encodeURIComponent(ticker)}&resolution=D&from=${from}&to=${now}&token=${encodeURIComponent(apiKey)}`,
     crypto: `https://finnhub.io/api/v1/crypto/candle?symbol=${encodeURIComponent(ticker)}&resolution=D&from=${from}&to=${now}&token=${encodeURIComponent(apiKey)}`,
@@ -599,21 +593,28 @@ async function fetchData(){
   };
 
   try{
-    const resp = await fetch(endpoints[type], { signal: AbortSignal.timeout(10000) });
+    const resp = await fetch(endpoints[type], { headers, signal: AbortSignal.timeout(12000) });
+
+    // Finnhub peut retourner 403 sur certains symboles non couverts par le plan gratuit
+    if(resp.status === 403) throw new Error(
+      type === 'stock'
+        ? `Accès refusé pour "${ticker}". Actions US uniquement sur le plan gratuit (ex: AAPL, TSLA, MSFT). Les actions européennes nécessitent un plan payant.`
+        : `Accès refusé. Vérifiez le format : Crypto→ BINANCE:BTCUSDT, Forex→ OANDA:EUR_USD`
+    );
+    if(resp.status === 401) throw new Error('Clé API invalide. Vérifiez sur finnhub.io → Dashboard.');
     if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
     const j = await resp.json();
 
-    // Gestion erreurs Finnhub
     if(j.s === 'no_data') throw new Error(
       `Aucune donnée pour "${ticker}". ` +
-      (type === 'stock'  ? 'Vérifiez le ticker (ex: AAPL, MC.PA, BNP.PA).' : '') +
-      (type === 'crypto' ? 'Format attendu : BINANCE:BTCUSDT' : '') +
-      (type === 'forex'  ? 'Format attendu : OANDA:EUR_USD' : '')
+      (type === 'stock'  ? 'Vérifiez le ticker (AAPL, TSLA, MSFT…)' : '') +
+      (type === 'crypto' ? 'Format : BINANCE:BTCUSDT, BINANCE:ETHUSDT' : '') +
+      (type === 'forex'  ? 'Format : OANDA:EUR_USD, OANDA:GBP_USD' : '')
     );
     if(j.error) throw new Error('Finnhub : ' + j.error);
-    if(!j.c || !j.t || j.c.length < 2) throw new Error('Données insuffisantes retournées.');
+    if(!j.c || !j.t || j.c.length < 2) throw new Error('Données insuffisantes retournées par Finnhub.');
 
-    // Construire les paires date / close
     const pairs = j.t
       .map((ts, i) => ({ date: new Date(ts * 1000), close: j.c[i], vol: j.v?.[i] || null }))
       .filter(p => !isNaN(p.close) && p.close > 0)
@@ -622,16 +623,14 @@ async function fetchData(){
 
     if(pairs.length < 2) throw new Error('Pas assez de points après filtrage.');
 
-    // ── Remplir le tableau de prix ──
     document.getElementById('priceRows').innerHTML = '';
     rowCount = 0;
     pairs.forEach(p => addRow(+p.close.toFixed(type === 'forex' ? 5 : 4)));
     document.getElementById('iName').value = ticker;
-
     autoFillProbabilities(pairs);
 
-    // ── Métadonnées ──
-    const lastClose = pairs[pairs.length-1].close.toFixed(type === 'forex' ? 5 : 2);
+    const dec       = type === 'forex' ? 5 : 2;
+    const lastClose = pairs[pairs.length-1].close.toFixed(dec);
     const perfPct   = ((pairs[pairs.length-1].close - pairs[0].close) / pairs[0].close * 100).toFixed(2);
     const lastDate  = pairs[pairs.length-1].date.toLocaleDateString('fr-FR');
     const vols      = pairs.map(p => p.vol).filter(Boolean);
@@ -651,30 +650,22 @@ async function fetchData(){
 
   } catch(e){
     let msg = e.message;
-    if(msg.includes('401') || msg.includes('403'))
-      msg = 'Clé API invalide. Vérifiez sur finnhub.io → Dashboard.';
-    else if(msg.includes('429'))
-      msg = 'Limite atteinte (60 req/min). Attendez quelques secondes.';
-    else if(msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('abort'))
+    if(msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('abort'))
       msg = 'Erreur réseau — vérifiez votre connexion.';
     setFetchStatus('Erreur : ' + msg, 'err');
     console.warn('[EFT] Finnhub error:', e);
     btn.disabled = false;
     return;
   }
-
   btn.disabled = false;
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  // Sauvegarder la clé Finnhub dans localStorage
   const keyInput = document.getElementById('yApiKey');
   const saved    = localStorage.getItem('eft_finnhub_key');
   if(saved && keyInput) keyInput.value = saved;
   if(keyInput){
-    keyInput.addEventListener('change', () => {
-      localStorage.setItem('eft_finnhub_key', keyInput.value.trim());
-    });
+    keyInput.addEventListener('change', () => { localStorage.setItem('eft_finnhub_key', keyInput.value.trim()); });
     keyInput.addEventListener('keydown', e => { if(e.key === 'Enter') fetchData(); });
   }
   const tickerInput = document.getElementById('yTicker');
