@@ -287,11 +287,16 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;background:var(--brig
     </div>
   </div>
 
-  <!-- FMP FETCH -->
-  <div class="slabel" style="margin-top:4px">Live Data Feed <span style="font-size:8px;letter-spacing:.04em;text-transform:none;color:var(--dim);margin-left:6px">Financial Modeling Prep · clé gratuite sur financialmodelingprep.com (250 req/jour)</span></div>
+  <!-- FINNHUB FETCH -->
+  <div class="slabel" style="margin-top:4px">Live Data Feed
+    <span style="font-size:8px;letter-spacing:.04em;text-transform:none;color:var(--dim);margin-left:6px">
+      Finnhub · clé gratuite sur finnhub.io/register · Actions US/EU · Crypto · Forex · 60 req/min
+    </span>
+  </div>
   <div class="fetch-block">
-    <input type="text" id="yApiKey" placeholder="Clé API FMP (gratuite)" title="Obtenez votre clé gratuite sur financialmodelingprep.com/register">
-    <input type="text" id="yTicker" value="AAPL" placeholder="AAPL" maxlength="12" title="Ex: AAPL, MC.PA, BNP.PA, IBM">
+    <input type="text" id="yApiKey" placeholder="Clé API Finnhub (gratuite)" title="Clé gratuite sur finnhub.io/register">
+    <input type="text" id="yTicker" value="AAPL" placeholder="AAPL" maxlength="20"
+      title="Actions: AAPL, MC.PA, BNP.PA | Crypto: BINANCE:BTCUSDT | Forex: OANDA:EUR_USD">
     <select id="yPeriod">
       <option value="30">30 jours</option>
       <option value="60" selected>60 jours</option>
@@ -300,7 +305,6 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;background:var(--brig
       <option value="365">1 an</option>
     </select>
     <button class="fetch-btn" id="fetchBtn" onclick="fetchData()">⬇ Fetch Data</button>
-    
     <span class="fetch-status" id="fetchStatus" style="display:none"></span>
     <div class="fetch-meta" id="fetchMeta" style="display:none"></div>
   </div>
@@ -533,80 +537,101 @@ function autoFillProbabilities(pairs){
    API gratuite · 250 req/jour · CORS natif
    Clé sur financialmodelingprep.com/register
 ══════════════════════════════════════════ */
+/* ══════════════════════════════════════════
+   FINNHUB — fetch historique OHLCV
+   API gratuite · 60 req/min · CORS natif
+   Clé sur finnhub.io/register
+
+   Détection automatique du type d'actif :
+   • Crypto  → ticker contient ":"       ex: BINANCE:BTCUSDT
+   • Forex   → ticker contient "_"       ex: OANDA:EUR_USD
+   • Action  → tout le reste             ex: AAPL, MC.PA, BNP.PA
+══════════════════════════════════════════ */
 function setFetchStatus(msg, type){
   const el = document.getElementById('fetchStatus');
   if(!el) return;
   el.textContent = msg;
-  el.className = 'fetch-status ' + type;
+  el.className   = 'fetch-status ' + type;
   el.style.display = 'inline-block';
 }
 
+function detectAssetType(ticker){
+  if(ticker.includes(':') && ticker.includes('USD') && !ticker.includes('.'))
+    return 'crypto';           // BINANCE:BTCUSDT, BINANCE:ETHUSDT…
+  if(ticker.includes(':') && ticker.includes('_'))
+    return 'forex';            // OANDA:EUR_USD, OANDA:GBP_USD…
+  return 'stock';              // AAPL, TSLA, MC.PA, BNP.PA…
+}
+
 async function fetchData(){
-  const apiKey = (document.getElementById('yApiKey').value || '').trim();
-  const ticker = (document.getElementById('yTicker').value || '').trim().toUpperCase();  const days   = parseInt(document.getElementById('yPeriod').value) || 60;
+  const apiKey = (document.getElementById('yApiKey').value  || '').trim();
+  const ticker = (document.getElementById('yTicker').value  || '').trim().toUpperCase();
+  const days   = parseInt(document.getElementById('yPeriod').value) || 60;
   const btn    = document.getElementById('fetchBtn');
   const meta   = document.getElementById('fetchMeta');
 
   if(!apiKey){
-    setFetchStatus('Entrez votre clé API FMP · gratuite sur financialmodelingprep.com/register', 'err');
+    setFetchStatus('Entrez votre clé API Finnhub · gratuite sur finnhub.io/register', 'err');
     return;
   }
   if(!ticker){
-    setFetchStatus('Entrez un ticker valide. Ex : AAPL, MC.PA, BNP.PA', 'err');
+    setFetchStatus('Entrez un ticker · ex : AAPL  MC.PA  BINANCE:BTCUSDT  OANDA:EUR_USD', 'err');
     return;
   }
 
   btn.disabled = true;
   meta.style.display = 'none';
-  setFetchStatus('Connexion à Financial Modeling Prep…', 'loading');
 
-  // Calcul des dates
-  const dateTo   = new Date();
-  const dateFrom = new Date();
-  dateFrom.setDate(dateTo.getDate() - (days + 15)); // marge weekends/fériés
-  const fmt = d => d.toISOString().split('T')[0];
+  const type   = detectAssetType(ticker);
+  const labels = { stock:'Action', crypto:'Crypto', forex:'Forex' };
+  setFetchStatus(`Connexion Finnhub (${labels[type]})…`, 'loading');
 
-  // FMP endpoint stable — EOD historique (dispo plan gratuit)
-  const url = `https://financialmodelingprep.com/stable/historical-price-eod/full?symbol=${encodeURIComponent(ticker)}&from=${fmt(dateFrom)}&to=${fmt(dateTo)}&apikey=${encodeURIComponent(apiKey)}`;
+  // Timestamps Unix (Finnhub utilise des secondes)
+  const now     = Math.floor(Date.now() / 1000);
+  const daysExt = days + 14;                     // marge weekends / jours fériés
+  const from    = now - daysExt * 86400;
+
+  // Endpoint selon le type d'actif
+  const endpoints = {
+    stock : `https://finnhub.io/api/v1/stock/candle?symbol=${encodeURIComponent(ticker)}&resolution=D&from=${from}&to=${now}&token=${encodeURIComponent(apiKey)}`,
+    crypto: `https://finnhub.io/api/v1/crypto/candle?symbol=${encodeURIComponent(ticker)}&resolution=D&from=${from}&to=${now}&token=${encodeURIComponent(apiKey)}`,
+    forex : `https://finnhub.io/api/v1/forex/candle?symbol=${encodeURIComponent(ticker)}&resolution=D&from=${from}&to=${now}&token=${encodeURIComponent(apiKey)}`,
+  };
 
   try{
-    const resp = await fetch(url, { signal: AbortSignal.timeout(10000) });
+    const resp = await fetch(endpoints[type], { signal: AbortSignal.timeout(10000) });
     if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const j = await resp.json();
 
-    // Gestion erreurs FMP
-    if(j['Error Message']) throw new Error('Ticker introuvable : ' + ticker);
-    if(j['message'])       throw new Error('Accès refusé — vérifiez votre clé API ou votre plan FMP (plan gratuit suffisant).');
+    // Gestion erreurs Finnhub
+    if(j.s === 'no_data') throw new Error(
+      `Aucune donnée pour "${ticker}". ` +
+      (type === 'stock'  ? 'Vérifiez le ticker (ex: AAPL, MC.PA, BNP.PA).' : '') +
+      (type === 'crypto' ? 'Format attendu : BINANCE:BTCUSDT' : '') +
+      (type === 'forex'  ? 'Format attendu : OANDA:EUR_USD' : '')
+    );
+    if(j.error) throw new Error('Finnhub : ' + j.error);
+    if(!j.c || !j.t || j.c.length < 2) throw new Error('Données insuffisantes retournées.');
 
-    // Le endpoint stable retourne un tableau direct OU { historicalStockList: [...] }
-    let raw = null;
-    if(Array.isArray(j))                          raw = j;
-    else if(Array.isArray(j.historical))          raw = j.historical;
-    else if(Array.isArray(j.historicalStockList)) raw = j.historicalStockList[0]?.historical;
-
-    if(!raw || raw.length === 0)
-      throw new Error('Aucune donnée reçue. Vérifiez le ticker (ex: AAPL, MC.PA) ou votre clé API.');
-
-    // FMP retourne du plus récent au plus ancien → on inverse
-    const sorted = [...raw]
-      .map(d => ({ date: new Date(d.date), close: parseFloat(d.close), vol: d.volume || null }))
+    // Construire les paires date / close
+    const pairs = j.t
+      .map((ts, i) => ({ date: new Date(ts * 1000), close: j.c[i], vol: j.v?.[i] || null }))
       .filter(p => !isNaN(p.close) && p.close > 0)
-      .sort((a, b) => a.date - b.date);
+      .sort((a, b) => a.date - b.date)
+      .slice(-days);
 
-    const pairs = sorted.slice(-days);
-    if(pairs.length < 2) throw new Error('Pas assez de données pour ce ticker / période.');
+    if(pairs.length < 2) throw new Error('Pas assez de points après filtrage.');
 
     // ── Remplir le tableau de prix ──
     document.getElementById('priceRows').innerHTML = '';
     rowCount = 0;
-    pairs.forEach(p => addRow(+p.close.toFixed(4)));
+    pairs.forEach(p => addRow(+p.close.toFixed(type === 'forex' ? 5 : 4)));
     document.getElementById('iName').value = ticker;
 
-    // ── Auto-calcul des probabilités ──
     autoFillProbabilities(pairs);
 
     // ── Métadonnées ──
-    const lastClose = pairs[pairs.length-1].close.toFixed(2);
+    const lastClose = pairs[pairs.length-1].close.toFixed(type === 'forex' ? 5 : 2);
     const perfPct   = ((pairs[pairs.length-1].close - pairs[0].close) / pairs[0].close * 100).toFixed(2);
     const lastDate  = pairs[pairs.length-1].date.toLocaleDateString('fr-FR');
     const vols      = pairs.map(p => p.vol).filter(Boolean);
@@ -615,25 +640,25 @@ async function fetchData(){
     meta.style.display = 'flex';
     meta.innerHTML = [
       `<span class="fetch-meta-item"><strong>${ticker}</strong></span>`,
-      `<span class="fetch-meta-item">Source <strong>Financial Modeling Prep</strong></span>`,
+      `<span class="fetch-meta-item">Source <strong>Finnhub</strong> · ${labels[type]}</span>`,
       `<span class="fetch-meta-item">Dernier cours <strong>${lastClose}</strong> (${lastDate})</span>`,
       `<span class="fetch-meta-item">Perf. période <strong style="color:${+perfPct>=0?'var(--bull)':'var(--bear)'}">${+perfPct>=0?'+':''}${perfPct}%</strong></span>`,
-      avgVol ? `<span class="fetch-meta-item">Vol. moy. <strong>${avgVol>1e6?(avgVol/1e6).toFixed(1)+'M':avgVol>1e3?(avgVol/1e3).toFixed(0)+'K':avgVol}</strong></span>` : '',
+      avgVol ? `<span class="fetch-meta-item">Vol. moy. <strong>${avgVol>1e9?(avgVol/1e9).toFixed(1)+'B':avgVol>1e6?(avgVol/1e6).toFixed(1)+'M':avgVol>1e3?(avgVol/1e3).toFixed(0)+'K':avgVol}</strong></span>` : '',
       `<span class="fetch-meta-item"><strong>${pairs.length} jours chargés</strong></span>`,
     ].join('');
 
-    setFetchStatus('OK — ' + pairs.length + ' cours chargés · ' + ticker, 'ok');
+    setFetchStatus(`OK — ${pairs.length} jours · ${ticker} (${labels[type]})`, 'ok');
 
   } catch(e){
     let msg = e.message;
-    if(msg.includes('401') || msg.includes('403') || msg.includes('Accès refusé'))
-      msg = 'Clé API rejetée par FMP. Vérifiez qu\'elle est bien copiée depuis financialmodelingprep.com → Dashboard.';
-    else if(msg.includes('HTTP 4'))
-      msg = 'Erreur API FMP (' + msg + '). Le plan gratuit donne accès aux actions US uniquement (AAPL, TSLA…).';
+    if(msg.includes('401') || msg.includes('403'))
+      msg = 'Clé API invalide. Vérifiez sur finnhub.io → Dashboard.';
+    else if(msg.includes('429'))
+      msg = 'Limite atteinte (60 req/min). Attendez quelques secondes.';
     else if(msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('abort'))
-      msg = 'Erreur réseau — vérifiez votre connexion internet.';
+      msg = 'Erreur réseau — vérifiez votre connexion.';
     setFetchStatus('Erreur : ' + msg, 'err');
-    console.warn('[EFT] FMP error:', e);
+    console.warn('[EFT] Finnhub error:', e);
     btn.disabled = false;
     return;
   }
@@ -642,18 +667,18 @@ async function fetchData(){
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  // Sauvegarder la clé API FMP dans localStorage pour ne pas la retaper
+  // Sauvegarder la clé Finnhub dans localStorage
   const keyInput = document.getElementById('yApiKey');
-  const saved = localStorage.getItem('eft_fmp_key');
+  const saved    = localStorage.getItem('eft_finnhub_key');
   if(saved && keyInput) keyInput.value = saved;
   if(keyInput){
     keyInput.addEventListener('change', () => {
-      localStorage.setItem('eft_fmp_key', keyInput.value.trim());
+      localStorage.setItem('eft_finnhub_key', keyInput.value.trim());
     });
-    keyInput.addEventListener('keydown', e => { if(e.key==='Enter') fetchData(); });
+    keyInput.addEventListener('keydown', e => { if(e.key === 'Enter') fetchData(); });
   }
   const tickerInput = document.getElementById('yTicker');
-  if(tickerInput) tickerInput.addEventListener('keydown', e => { if(e.key==='Enter') fetchData(); });
+  if(tickerInput) tickerInput.addEventListener('keydown', e => { if(e.key === 'Enter') fetchData(); });
 });
 
 /* ── VALIDATION ── */
