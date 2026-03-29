@@ -429,7 +429,7 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;background:var(--brig
         <span id="pdfZoomLabel" style="font-size:9px;color:var(--mid);letter-spacing:.08em;min-width:36px;text-align:center">100%</span>
         <button onclick="pdfZoom(+0.15)" style="background:none;border:1px solid var(--line2);color:var(--dim);font-family:var(--font);font-size:11px;padding:5px 10px;cursor:pointer;transition:all .15s" onmouseover="this.style.color='var(--bright)'" onmouseout="this.style.color='var(--dim)'">+</button>
       </div>
-      <a href="eft_model_documentation.pdf" download
+      <a href="EFT_model_documentation.pdf" download
          style="display:inline-flex;align-items:center;gap:8px;background:none;border:1px solid var(--line2);color:var(--dim);font-family:var(--font);font-size:9px;letter-spacing:.12em;text-transform:uppercase;padding:8px 14px;cursor:pointer;text-decoration:none;transition:all .15s"
          onmouseover="this.style.borderColor='var(--mid)';this.style.color='var(--mid)'"
          onmouseout="this.style.borderColor='var(--line2)';this.style.color='var(--dim)'">
@@ -484,14 +484,14 @@ async function loadPdf(){
   if(pdfRendered) return;
   pdfRendered = true;
   try{
-    pdfDoc = await pdfjsLib.getDocument('eft_model_documentation.pdf').promise;
+    pdfDoc = await pdfjsLib.getDocument('EFT_model_documentation.pdf').promise;
     document.getElementById('pdfZoomLabel').textContent = Math.round(pdfScale * 100) + '%';
     await renderAllPages();
   } catch(e){
     document.getElementById('pdfContainer').innerHTML =
       `<div style="padding:32px;text-align:center;color:var(--muted);font-size:11px;letter-spacing:.06em">
         Impossible de charger le PDF.<br><br>
-        <a href="eft_doc_en.pdf" download style="color:var(--neu)">Télécharger la documentation</a>
+        <a href="EFT_model_documentation.pdf" download style="color:var(--neu)">Télécharger la documentation</a>
       </div>`;
   }
 }
