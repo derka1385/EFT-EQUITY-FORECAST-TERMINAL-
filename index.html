@@ -422,23 +422,22 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;background:var(--brig
       <div class="slabel" style="margin-bottom:4px">Mathematical &amp; Statistical Documentation</div>
       <div style="font-size:9px;color:var(--dim);letter-spacing:.06em">EFT v5.0 · GBM · Bayesian Calibration · Monte Carlo · Confidence Index · Risk Score</div>
     </div>
-    <a href="eft_model_documentation_1.pdf" download
-       style="display:inline-flex;align-items:center;gap:8px;background:none;border:1px solid var(--line2);color:var(--dim);font-family:var(--font);font-size:9px;letter-spacing:.12em;text-transform:uppercase;padding:8px 14px;cursor:pointer;text-decoration:none;transition:all .15s"
-       onmouseover="this.style.borderColor='var(--mid)';this.style.color='var(--mid)'"
-       onmouseout="this.style.borderColor='var(--line2)';this.style.color='var(--dim)'">
-      ⬇ Download PDF
-    </a>
-  </div>
-  <div style="background:var(--bg1);border:1px solid var(--line);overflow:hidden">
-    <iframe
-      src="eft_model_documentation_1.pdf#zoom=75&view=FitH"
-      style="width:100%;height:82vh;border:none;display:block;transform-origin:top left;"
-      title="EFT Mathematical Documentation">
-      <div style="padding:32px;text-align:center;color:var(--muted);font-size:11px;letter-spacing:.06em">
-        Votre navigateur ne supporte pas l'affichage PDF intégré.<br><br>
-        <a href="eft_model_documentation_1.pdf" download style="color:var(--neu)">Télécharger la documentation</a>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <div style="display:flex;gap:6px;align-items:center">
+        <button onclick="pdfZoom(-0.15)" style="background:none;border:1px solid var(--line2);color:var(--dim);font-family:var(--font);font-size:11px;padding:5px 10px;cursor:pointer;transition:all .15s" onmouseover="this.style.color='var(--bright)'" onmouseout="this.style.color='var(--dim)'">−</button>
+        <span id="pdfZoomLabel" style="font-size:9px;color:var(--mid);letter-spacing:.08em;min-width:36px;text-align:center">100%</span>
+        <button onclick="pdfZoom(+0.15)" style="background:none;border:1px solid var(--line2);color:var(--dim);font-family:var(--font);font-size:11px;padding:5px 10px;cursor:pointer;transition:all .15s" onmouseover="this.style.color='var(--bright)'" onmouseout="this.style.color='var(--dim)'">+</button>
       </div>
-    </iframe>
+      <a href="eft_doc_en.pdf" download
+         style="display:inline-flex;align-items:center;gap:8px;background:none;border:1px solid var(--line2);color:var(--dim);font-family:var(--font);font-size:9px;letter-spacing:.12em;text-transform:uppercase;padding:8px 14px;cursor:pointer;text-decoration:none;transition:all .15s"
+         onmouseover="this.style.borderColor='var(--mid)';this.style.color='var(--mid)'"
+         onmouseout="this.style.borderColor='var(--line2)';this.style.color='var(--dim)'">
+        ⬇ Download PDF
+      </a>
+    </div>
+  </div>
+  <div id="pdfContainer" style="background:var(--bg1);border:1px solid var(--line);overflow-y:auto;max-height:82vh;padding:16px;display:flex;flex-direction:column;align-items:center;gap:12px">
+    <div id="pdfLoading" style="padding:48px;color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase">Chargement du document…</div>
   </div>
   <div style="margin-top:10px;font-size:9px;color:var(--muted);letter-spacing:.06em;text-align:right">
     EFT Mathematical Documentation v5.0 · Nolann Petri · © 2025
@@ -446,6 +445,55 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;background:var(--brig
 </div>
 
 </div><!-- /page -->
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.6.347/pdf.min.js"></script>
+<script>
+/* ── PDF.js VIEWER ── */
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.6.347/pdf.worker.min.js';
+
+let pdfDoc      = null;
+let pdfScale    = 1.4;
+let pdfRendered = false;
+
+function pdfZoom(delta){
+  pdfScale = Math.max(0.5, Math.min(3.0, pdfScale + delta));
+  document.getElementById('pdfZoomLabel').textContent = Math.round(pdfScale * 100) + '%';
+  if(pdfDoc) renderAllPages();
+}
+
+async function renderAllPages(){
+  const container = document.getElementById('pdfContainer');
+  container.innerHTML = '';
+  for(let i = 1; i <= pdfDoc.numPages; i++){
+    const page    = await pdfDoc.getPage(i);
+    const vp      = page.getViewport({ scale: pdfScale });
+    const wrapper = document.createElement('div');
+    wrapper.style.cssText = `position:relative;background:#fff;box-shadow:0 2px 12px rgba(0,0,0,.4);`;
+    const canvas  = document.createElement('canvas');
+    canvas.width  = vp.width;
+    canvas.height = vp.height;
+    canvas.style.display = 'block';
+    wrapper.appendChild(canvas);
+    container.appendChild(wrapper);
+    await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+  }
+}
+
+async function loadPdf(){
+  if(pdfRendered) return;
+  pdfRendered = true;
+  try{
+    pdfDoc = await pdfjsLib.getDocument('eft_doc_en.pdf').promise;
+    document.getElementById('pdfZoomLabel').textContent = Math.round(pdfScale * 100) + '%';
+    await renderAllPages();
+  } catch(e){
+    document.getElementById('pdfContainer').innerHTML =
+      `<div style="padding:32px;text-align:center;color:var(--muted);font-size:11px;letter-spacing:.06em">
+        Impossible de charger le PDF.<br><br>
+        <a href="eft_doc_en.pdf" download style="color:var(--neu)">Télécharger la documentation</a>
+      </div>`;
+  }
+}
 
 <script>
 /* ── CLOCK ── */
@@ -464,6 +512,7 @@ function switchTab(t){
   const tabs = ['input','results','docs'];
   const idx = tabs.indexOf(t);
   if(idx>=0) document.querySelectorAll('.nav-tab')[idx].classList.add('active');
+  if(t === 'docs') loadPdf();
 }
 
 /* ── PRICE ROWS ── */
