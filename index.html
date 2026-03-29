@@ -557,42 +557,75 @@ function detectAssetType(ticker){
   return 'stock';
 }
 
-// Yahoo Finance via allorigins CORS proxy — no key needed
-async function fetchYahoo(ticker, days){
-  const interval = '1d';
-  const period2  = Math.floor(Date.now() / 1000);
-  const period1  = period2 - (days + 20) * 86400;
-
-  const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=${interval}&period1=${period1}&period2=${period2}`;
-  const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(yahooUrl)}`;
-
-  const resp = await fetch(proxyUrl, { signal: AbortSignal.timeout(15000) });
-  if(!resp.ok) throw new Error(`Erreur proxy HTTP ${resp.status}`);
-
-  const outer = await resp.json();
-  if(!outer.contents) throw new Error('Réponse proxy vide.');
-
-  const j = JSON.parse(outer.contents);
+// Parse Yahoo Finance JSON response into pairs array
+function parseYahooJson(j, days){
   const result = j?.chart?.result?.[0];
-  if(!result) {
+  if(!result){
     const errMsg = j?.chart?.error?.description || 'Ticker introuvable sur Yahoo Finance.';
     throw new Error(errMsg);
   }
-
   const timestamps = result.timestamp || [];
   const closes     = result.indicators?.quote?.[0]?.close || [];
   const volumes    = result.indicators?.quote?.[0]?.volume || [];
-
   if(timestamps.length < 2 || closes.length < 2) throw new Error('Données insuffisantes retournées.');
-
   const pairs = timestamps
     .map((ts, i) => ({ date: new Date(ts * 1000), close: closes[i], vol: volumes[i] || null }))
     .filter(p => p.close != null && !isNaN(p.close) && p.close > 0)
     .sort((a, b) => a.date - b.date)
     .slice(-days);
-
   if(pairs.length < 3) throw new Error('Pas assez de points après filtrage.');
   return pairs;
+}
+
+// Yahoo Finance — multi-proxy fallback chain, no API key needed
+async function fetchYahoo(ticker, days){
+  const period2  = Math.floor(Date.now() / 1000);
+  const period1  = period2 - (days + 20) * 86400;
+  const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&period1=${period1}&period2=${period2}`;
+  const yahooUrl2= `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&period1=${period1}&period2=${period2}`;
+
+  // Proxy list — tried in order until one succeeds
+  const proxies = [
+    u => `https://corsproxy.io/?${encodeURIComponent(u)}`,
+    u => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`,
+    u => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
+  ];
+
+  // allorigins wraps response in {contents:...}, others return raw JSON
+  async function tryProxy(proxyFn, yahooTarget, isAllOrigins){
+    const url  = proxyFn(yahooTarget);
+    const resp = await fetch(url, { signal: AbortSignal.timeout(12000) });
+    if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    if(isAllOrigins){
+      const outer = await resp.json();
+      if(!outer.contents) throw new Error('Réponse proxy vide.');
+      return JSON.parse(outer.contents);
+    }
+    return await resp.json();
+  }
+
+  const attempts = [
+    () => tryProxy(proxies[0], yahooUrl,  false),
+    () => tryProxy(proxies[0], yahooUrl2, false),
+    () => tryProxy(proxies[1], yahooUrl,  true),
+    () => tryProxy(proxies[1], yahooUrl2, true),
+    () => tryProxy(proxies[2], yahooUrl,  false),
+    () => tryProxy(proxies[2], yahooUrl2, false),
+  ];
+
+  let lastErr;
+  for(let i = 0; i < attempts.length; i++){
+    try{
+      setFetchStatus(`Tentative ${i+1}/${attempts.length}…`, 'loading');
+      const j = await attempts[i]();
+      return parseYahooJson(j, days);
+    } catch(e){
+      lastErr = e;
+      // If it's a known ticker error (not a network error), stop retrying
+      if(e.message.includes('introuvable') || e.message.includes('No data')) throw e;
+    }
+  }
+  throw new Error('Tous les proxies ont échoué. Vérifiez votre connexion ou réessayez dans quelques secondes.');
 }
 
 async function fetchData(){
