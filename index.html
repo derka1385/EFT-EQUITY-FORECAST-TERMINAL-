@@ -307,7 +307,12 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;background:var(--brig
     <div class="fetch-meta" id="fetchMeta" style="display:none"></div>
   </div>
 
-  <div class="slabel">Price History <span style="font-size:8px;letter-spacing:.04em;text-transform:none;color:var(--dim);margin-left:6px">(min. 3 jours)</span></div>
+  <div style="position:sticky;top:36px;z-index:90;background:var(--bg);padding:8px 0 6px;margin-bottom:2px;border-bottom:1px solid var(--line)">
+    <button class="run-btn" style="margin-bottom:0" onclick="runModel()">▶ &nbsp; RUN FORECAST MODEL</button>
+    <div class="validation-msg" id="validMsgTop" style="margin-bottom:0;min-height:0;padding-top:4px"></div>
+  </div>
+
+  <div class="slabel" style="margin-top:12px">Price History <span style="font-size:8px;letter-spacing:.04em;text-transform:none;color:var(--dim);margin-left:6px">(min. 3 jours)</span></div>
   <div class="price-table-wrap">
     <div class="price-table-header">
       <span>Jour</span><span>Prix (€)</span><span>Var. €</span><span>Var. %</span><span>Log-ret.</span><span>Statut</span>
@@ -403,6 +408,10 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;background:var(--brig
   <div class="footer">
     <div class="footer-l">EFT v5.1 · GBM + AR(1) + Bayesian Fusion + Confidence Index · Yahoo Finance · Not investment advice</div>
     <div class="footer-r" id="footerDate"></div>
+    <div style="width:100%;margin-top:10px;padding-top:10px;border-top:1px solid var(--line);display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px">
+      <span style="font-size:9px;color:var(--muted);letter-spacing:.08em">Student Project · Built by a 12th grade student · <span style="color:var(--dim)">Nolann Petri</span></span>
+      <span style="font-size:9px;color:var(--muted);letter-spacing:.06em">© 2025 — Tous droits réservés</span>
+    </div>
   </div>
 </div>
 </div><!-- /page -->
@@ -707,6 +716,15 @@ function validate(){
   if(Math.abs(tP-1)>0.01) return `Total probabilités = ${(tP*100).toFixed(1)}% ≠ 100%.`;
   return null;
 }
+function setValidMsg(msg, ok){
+  ['validMsg','validMsgTop'].forEach(id=>{
+    const el=document.getElementById(id);
+    if(!el) return;
+    el.textContent=msg||'';
+    el.className='validation-msg'+(ok?' ok':'');
+    el.style.minHeight=msg?'16px':'0';
+  });
+}
 
 /* ══════════════════════════════════════════
    MODEL CORE
@@ -971,9 +989,8 @@ function buildModel(){
 
 function runModel(){
   const err=validate();
-  const msg=document.getElementById('validMsg');
-  if(err){msg.textContent='⚠ '+err;msg.className='validation-msg';return;}
-  msg.textContent='';
+  if(err){setValidMsg('⚠ '+err, false);return;}
+  setValidMsg('', false);
   buildModel();
   currentHorizon=+document.getElementById('iHorizon').value||20;
   document.getElementById('slH').value=currentHorizon;
